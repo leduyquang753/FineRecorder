@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Fine recorder</string>
+    <string name="notifications_description">Records audio.</string>
+</resources>
