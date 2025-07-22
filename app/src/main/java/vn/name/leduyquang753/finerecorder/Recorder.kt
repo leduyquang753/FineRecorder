@@ -26,15 +26,23 @@ class Recorder: Service() {
 	companion object {
 		const val MAX_LEVEL: Int = 32767;
 	}
-	
+
 	private lateinit var mediaRecorder: MediaRecorder;
 	private lateinit var parcelFileDescriptor: ParcelFileDescriptor;
 	private var recording: Boolean = false;
 	var fileName: String = ""; private set;
 	var startTime: Long = 0; private set;
 	var stopCallback: (() -> Unit)? = null;
-	
+
 	override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+		val maybeParameters: RecordingParameters? = if (intent == null) {
+			null;
+		} else {
+			@Suppress("DEPRECATION")
+			intent.getParcelableExtra("vn.name.leduyquang753.finerecorder.recordingparameters");
+		};
+		val parameters = maybeParameters ?: RecordingParameters(48000, 128 shl 10, true);
+
 		fileName = "${System.currentTimeMillis()}.opus";
 		startForeground(
 			1,
@@ -60,7 +68,7 @@ class Recorder: Service() {
 			.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
 			.build()
 		);
-		
+
 		val contentValues = ContentValues();
 		contentValues.put(MediaColumns.DISPLAY_NAME, fileName);
 		contentValues.put(MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_RECORDINGS);
@@ -68,22 +76,22 @@ class Recorder: Service() {
 		parcelFileDescriptor = contentResolver.openFileDescriptor(
 			contentResolver.insert(Media.EXTERNAL_CONTENT_URI, contentValues) ?: return START_NOT_STICKY, "w"
 		) ?: return START_NOT_STICKY;
-		
+
 		try {
-			@Suppress("DEPRECATION")
-			mediaRecorder = MediaRecorder();
+			mediaRecorder = MediaRecorder(this);
 			mediaRecorder.setAudioSource(AudioSource.MIC);
 			mediaRecorder.setOutputFormat(OutputFormat.OGG);
 			mediaRecorder.setAudioEncoder(AudioEncoder.OPUS);
-			mediaRecorder.setAudioSamplingRate(48000);
-			mediaRecorder.setAudioEncodingBitRate(128000);
-			mediaRecorder.setAudioChannels(1);
+			mediaRecorder.setAudioSamplingRate(parameters.samplingRate);
+			mediaRecorder.setAudioEncodingBitRate(parameters.bitrate);
+			mediaRecorder.setAudioChannels(if (parameters.stereo) 2 else 1);
 			mediaRecorder.setOutputFile(parcelFileDescriptor.fileDescriptor);
 			mediaRecorder.prepare();
 			mediaRecorder.start();
 		} catch (e: IllegalStateException) {
 			e.printStackTrace();
 			parcelFileDescriptor.closeWithError("Failed to start recording.");
+			stopSelf();
 		}
 
 		recording = true;
@@ -99,8 +107,7 @@ class Recorder: Service() {
 	}
 
 	fun stop() {
-		val localStopCallback = stopCallback;
-		if (localStopCallback != null) localStopCallback();
+		stopCallback?.let { it(); };
 		recording = false;
 		mediaRecorder.stop();
 		mediaRecorder.release();

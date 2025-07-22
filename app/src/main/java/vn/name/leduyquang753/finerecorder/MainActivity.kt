@@ -12,11 +12,14 @@ import android.content.ServiceConnection;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.Parcelable;
 import android.os.SystemClock;
 import androidx.activity.ComponentActivity;
 import androidx.activity.compose.setContent;
+import androidx.activity.enableEdgeToEdge;
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions;
 import androidx.compose.foundation.background;
+import androidx.compose.foundation.layout.Arrangement;
 import androidx.compose.foundation.layout.Box;
 import androidx.compose.foundation.layout.Column;
 import androidx.compose.foundation.layout.Row;
@@ -32,11 +35,16 @@ import androidx.compose.material3.ExperimentalMaterial3Api;
 import androidx.compose.material3.FilledIconToggleButton;
 import androidx.compose.material3.Icon;
 import androidx.compose.material3.MaterialTheme;
+import androidx.compose.material3.Scaffold;
+import androidx.compose.material3.Slider;
 import androidx.compose.material3.Surface;
+import androidx.compose.material3.Switch;
 import androidx.compose.material3.Text;
 import androidx.compose.runtime.Composable;
 import androidx.compose.runtime.LaunchedEffect;
 import androidx.compose.runtime.getValue;
+import androidx.compose.runtime.mutableFloatStateOf;
+import androidx.compose.runtime.mutableLongStateOf;
 import androidx.compose.runtime.mutableStateOf;
 import androidx.compose.runtime.saveable.rememberSaveable;
 import androidx.compose.runtime.setValue;
@@ -50,7 +58,16 @@ import androidx.compose.ui.unit.dp;
 import kotlin.math.log10;
 import kotlin.math.max;
 import kotlin.math.pow;
+import kotlin.math.round;
+import kotlinx.parcelize.Parcelize;
 import vn.name.leduyquang753.finerecorder.ui.theme.FineRecorderTheme;
+
+@Parcelize
+data class RecordingParameters(
+	var samplingRate: Int,
+	var bitrate: Int,
+	var stereo: Boolean
+): Parcelable;
 
 class MainActivity: ComponentActivity() {
 	private var recorder by mutableStateOf<Recorder?>(null);
@@ -67,9 +84,11 @@ class MainActivity: ComponentActivity() {
 			recorder = null;
 		}
 	};
-	
+
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState);
+
+		enableEdgeToEdge();
 
 		val notificationChannel = NotificationChannel(
 			"vn.name.leduyquang753.finerecorder.notifications", "Fine recorder",
@@ -86,15 +105,15 @@ class MainActivity: ComponentActivity() {
 			else
 				arrayOf(Manifest.permission.RECORD_AUDIO)
 		);
-			
-		val recordingIntent = Intent(this, Recorder::class.java);
-		bindService(recordingIntent, recorderConnection, 0);
-		
-		setContent { FineRecorderTheme { Surface(
+
+		setContent { Scaffold { innerPadding -> FineRecorderTheme { Surface(
 			modifier = Modifier.fillMaxSize(),
 			color = MaterialTheme.colorScheme.background
 		) {
-			MainScreen(recorder) {
+			MainScreen(Modifier.padding(innerPadding), recorder) { parameters ->
+				val recordingIntent = Intent(this, Recorder::class.java);
+				recordingIntent.putExtra("vn.name.leduyquang753.finerecorder.recordingparameters", parameters);
+				bindService(recordingIntent, recorderConnection, 0);
 				val localRecorder = recorder;
 				if (localRecorder == null) {
 					startForegroundService(recordingIntent);
@@ -103,7 +122,7 @@ class MainActivity: ComponentActivity() {
 					localRecorder.stop();
 				}
 			};
-		}; }; };
+		}; }; }; };
 	}
 
 	override fun onDestroy() {
@@ -118,24 +137,30 @@ class MainActivity: ComponentActivity() {
 }
 
 @Composable
-fun MainScreen(recorder: Recorder?, toggleRecording: () -> Unit) {
-	var recordingTime by rememberSaveable { mutableStateOf(0L); };
-	var lastLevel by rememberSaveable { mutableStateOf(0.0f); };
-	var peakLevel by rememberSaveable { mutableStateOf(0.0f); };
+fun MainScreen(modifier: Modifier, recorder: Recorder?, toggleRecording: (RecordingParameters) -> Unit) {
+	var stereo by rememberSaveable { mutableStateOf(true); };
+	var bitrate by rememberSaveable { mutableFloatStateOf(128f); };
+
+	var recordingTime by rememberSaveable { mutableLongStateOf(0L); };
+	var lastLevel by rememberSaveable { mutableFloatStateOf(0f); };
+	var peakLevel by rememberSaveable { mutableFloatStateOf(0f); };
 	var peakLevelStaying by rememberSaveable { mutableStateOf(false); };
-	var peakValue by rememberSaveable { mutableStateOf(0.0f); };
-	
-	Column(Modifier.padding(16.dp)) {
+	var peakValue by rememberSaveable { mutableFloatStateOf(0f); };
+
+	Column(
+		modifier.padding(16.dp).padding(horizontal = 32.dp),
+		verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.Top)
+	) {
 		Box(Modifier.fillMaxWidth()) { FilledIconToggleButton(
 			recorder != null,
 			{
 				if (recorder == null) {
 					recordingTime = 0L;
-					lastLevel = 0.0f;
-					peakLevel = 0.0f;
+					lastLevel = 0f;
+					peakLevel = 0f;
 					peakLevelStaying = false;
 				}
-				toggleRecording();
+				toggleRecording(RecordingParameters(48000, round(bitrate).toInt() shl 10, true));
 			},
 			Modifier.size(120.dp).align(Alignment.Center)
 		) { Icon(
@@ -145,7 +170,22 @@ fun MainScreen(recorder: Recorder?, toggleRecording: () -> Unit) {
 			if (recorder == null) "Record" else "Stop",
 			Modifier.size(90.dp)
 		); }; };
-		if (recorder != null) {
+		if (recorder == null) {
+			Row(verticalAlignment = Alignment.CenterVertically) {
+				Switch(stereo, { stereo = it; }, Modifier.padding(end = 8.dp));
+				Text("Stereo");
+			};
+			Column {
+				Text("Bitrate: ${round(bitrate).toInt()} kbps");
+				Slider(
+					bitrate,
+					{ bitrate = it; },
+					Modifier.fillMaxWidth(),
+					valueRange = 32f..256f,
+					steps = (256 - 32) / 32 - 1
+				);
+			};
+		} else {
 			val hours = recordingTime / 3600;
 			val minutes = recordingTime % 3600 / 60;
 			val seconds = recordingTime % 60;
@@ -162,19 +202,19 @@ fun MainScreen(recorder: Recorder?, toggleRecording: () -> Unit) {
 			}
 			timeText += seconds;
 			if (recordingTime < 60) timeText += "\"";
-			
+
 			Text(recorder.fileName);
 			Text(timeText, Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.displaySmall);
 
 			fun computeTextPosition(containerWidth: Int, elementWidth: Int, position: Float) = (
-				if ((position - elementWidth / 2.0f) < 0) 0
-				else if (position + elementWidth / 2.0f > containerWidth) containerWidth - elementWidth
-				else position - elementWidth / 2.0f
+				if ((position - elementWidth / 2f) < 0) 0
+				else if (position + elementWidth / 2f > containerWidth) containerWidth - elementWidth
+				else position - elementWidth / 2f
 			).toInt();
-			
-			Column(Modifier.weight(1.0f)) {
+
+			Column(Modifier.weight(1f)) {
 				Column(Modifier.height(24.dp).padding(bottom = 4.dp)) {
-					Spacer(Modifier.weight(1.0f));
+					Spacer(Modifier.weight(1f));
 					if (peakLevel > 0.1f && peakLevelStaying) Layout({
 						val cb /* Centibels. */ = (-200 * log10(peakValue)).toInt();
 						Text("-${cb / 10},${cb % 10} dB", color = MaterialTheme.colorScheme.secondary);
@@ -193,7 +233,7 @@ fun MainScreen(recorder: Recorder?, toggleRecording: () -> Unit) {
 						Modifier
 						.fillMaxWidth(peakLevel).height(16.dp)
 					) {
-						Spacer(Modifier.weight(1.0f));
+						Spacer(Modifier.weight(1f));
 						Box(Modifier.width(2.dp).fillMaxHeight().background(MaterialTheme.colorScheme.secondary));
 					};
 					Box(
@@ -217,13 +257,13 @@ fun MainScreen(recorder: Recorder?, toggleRecording: () -> Unit) {
 							-30, -42, -54, -78
 						)) { element, db ->
 							element.placeRelative(
-								computeTextPosition(width, element.width, 10.0f.pow(db / 60.0f) * width), 0
+								computeTextPosition(width, element.width, 10f.pow(db / 60f) * width), 0
 							);
 						};
 					};
 				};
 			};
-			
+
 			LaunchedEffect(recorder) {
 				var lastTime = withFrameMillis { time -> time };
 				var lastPeakTime = -2000L;
@@ -233,8 +273,8 @@ fun MainScreen(recorder: Recorder?, toggleRecording: () -> Unit) {
 						if (currentTime < recorder.startTime) 0L
 						else (currentTime - recorder.startTime) / 1000;
 					val value = recorder.level / Recorder.MAX_LEVEL.toFloat();
-					lastLevel = max(lastLevel - (time - lastTime) / 1000.0f, value.pow(1/3.0f));
-					if (time - lastPeakTime >= 2000) peakLevel = max(0.0f, peakLevel - (time - lastTime) / 1000.0f);
+					lastLevel = max(lastLevel - (time - lastTime) / 1000f, value.pow(1/3f));
+					if (time - lastPeakTime >= 2000) peakLevel = max(0f, peakLevel - (time - lastTime) / 1000f);
 					if (lastLevel > peakLevel) {
 						peakLevel = lastLevel;
 						peakValue = value;
